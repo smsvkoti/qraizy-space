@@ -1,0 +1,542 @@
+<!-- index.html -->
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>To the Moon</title>
+    <style>
+      html, body { margin: 0; height: 100%; background:#070a12; color:#eaf2ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      canvas { display:block; width:100vw; height:100vh; }
+      .hud{
+        position:fixed; left:12px; top:12px; z-index:10;
+        background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12);
+        padding:10px 12px; border-radius:12px;
+        backdrop-filter: blur(6px);
+        font-size:14px; line-height:1.3;
+      }
+      .hud b{ font-weight:700; }
+      .hint{
+        position:fixed; right:12px; top:12px; z-index:10; width:min(320px, calc(100vw - 24px));
+        background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12);
+        padding:10px 12px; border-radius:12px;
+        color:#cfe0ff;
+        font-size:13px;
+      }
+      .center{
+        position:fixed; inset:0; display:grid; place-items:center; z-index:20; pointer-events:none;
+      }
+      .card{
+        pointer-events:auto;
+        width:min(520px, calc(100vw - 24px));
+        background:rgba(255,255,255,.08);
+        border:1px solid rgba(255,255,255,.16);
+        border-radius:16px;
+        padding:18px;
+        backdrop-filter: blur(8px);
+        box-shadow: 0 20px 60px rgba(0,0,0,.45);
+      }
+      .card h1{ margin:0 0 10px; font-size:22px; }
+      .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+      button{
+        appearance:none; border:none; cursor:pointer;
+        padding:10px 14px; border-radius:12px;
+        color:#071021; font-weight:700;
+        background:linear-gradient(180deg,#76d6ff,#49a6ff);
+      }
+      .sub{ color:#cfe0ff; font-size:13px; margin-top:8px; }
+      .kbd{ display:inline-flex; gap:6px; align-items:center; }
+      code{
+        background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.12);
+        padding:2px 8px; border-radius:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        color:#eaf2ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hud">
+      <div><b>Schub:</b> <span id="thr">—</span></div>
+      <div><b>Höhe:</b> <span id="hgt">0</span> m</div>
+      <div><b>Score:</b> <span id="scr">0</span></div>
+    </div>
+
+    <div class="hint">
+      <div style="font-weight:700; margin-bottom:6px;">Steuerung</div>
+      <div class="kbd">Links/Rechts: <code>A</code>/<code>D</code> oder <code>←</code>/<code>→</code></div>
+      <div class="kbd">Schub: <code>W</code> oder <code>↑</code></div>
+      <div class="kbd" style="margin-top:6px;">Stabilisieren: <code>S</code> oder <code>↓</code></div>
+      <div class="sub">Ziel: zum Mond fliegen. Landung gelingt bei wenig Geschwindigkeit & Winkel nahe 0.</div>
+    </div>
+
+    <div class="center" id="overlay">
+      <div class="card">
+        <h1>To the Moon 🚀</h1>
+        <div class="row">
+          <button id="startBtn">Start</button>
+          <button id="restartBtn" style="display:none; background:linear-gradient(180deg,#ffd36b,#ff9a3d);">Wiederholen</button>
+        </div>
+        <div class="sub">
+          Du bist eine kleine Rakete. Sammle „Stabilität“-Punkte (flieg ruhig).
+          Im Spiel: halte die Rakete zentriert über dem Mond und reduziere die Geschwindigkeit.
+        </div>
+      </div>
+    </div>
+
+    <canvas id="c"></canvas>
+
+    <script>
+      (() => {
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        const thrEl = document.getElementById('thr');
+        const hgtEl = document.getElementById('hgt');
+        const scrEl = document.getElementById('scr');
+        const overlay = document.getElementById('overlay');
+        const startBtn = document.getElementById('startBtn');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // Resize
+        const DPR = () => Math.min(2, window.devicePixelRatio || 1);
+        function resize() {
+          const dpr = DPR();
+          canvas.width = Math.floor(innerWidth * dpr);
+          canvas.height = Math.floor(innerHeight * dpr);
+          canvas.style.width = innerWidth + 'px';
+          canvas.style.height = innerHeight + 'px';
+          ctx.setTransform(dpr,0,0,dpr,0,0);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // World constants
+        const world = {
+          gravity: 900,        // px/s^2-ish
+          air: 0.015,          // drag
+          maxFuel: 1100,
+        };
+
+        const rnd = (a,b)=>a+Math.random()*(b-a);
+
+        // Inputs
+        const keys = new Set();
+        window.addEventListener('keydown', (e) => {
+          const k = e.key.toLowerCase();
+          if (["arrowleft","arrowright","arrowup","arrowdown","a","d","w","s"].includes(k) || ["a","d","w","s"].includes(k)) {
+            keys.add(k);
+          } else {
+            // also support non-arrow WASD
+            if (k.length === 1) keys.add(k);
+          }
+          if (e.key === ' ') e.preventDefault();
+        });
+        window.addEventListener('keyup', (e) => {
+          keys.delete(e.key.toLowerCase());
+          if (e.key.length === 1) keys.delete(e.key.toLowerCase());
+        });
+
+        function keyHeld(...arr) {
+          return arr.some(k => keys.has(k));
+        }
+
+        // Game state
+        const state = {
+          running: false,
+          t: 0,
+          best: 0,
+          score: 0,
+          fuel: world.maxFuel,
+          // rocket
+          x: 0, y: 0,
+          vx: 0, vy: 0,
+          angle: 0,
+          av: 0,
+          alive: true,
+          landed: false,
+          // moon
+          moonX: 0, moonY: 0,
+          // particles
+          exhaust: [],
+          stars: [],
+          shake: 0,
+        };
+
+        function reset() {
+          state.running = false;
+          state.t = 0;
+          state.score = 0;
+          state.fuel = world.maxFuel;
+          state.alive = true;
+          state.landed = false;
+          state.shake = 0;
+
+          const w = innerWidth, h = innerHeight;
+          state.moonX = w * 0.5;
+          state.moonY = h * 0.78;
+
+          // start near bottom-ish center with some offset
+          state.x = w * 0.5 + rnd(-80, 80);
+          state.y = h * 0.18 + rnd(-20, 20);
+          state.vx = rnd(-40, 40);
+          state.vy = 60;
+          state.angle = rnd(-0.08, 0.08);
+          state.av = rnd(-0.4, 0.4);
+
+          state.exhaust.length = 0;
+
+          // stars
+          state.stars = new Array(110).fill(0).map(() => ({
+            x: rnd(0,w),
+            y: rnd(0,h),
+            r: rnd(0.6, 1.8),
+            a: rnd(0.25, 0.9),
+            tw: rnd(0, Math.PI*2),
+          }));
+
+          overlay.style.display = 'grid';
+          startBtn.style.display = 'inline-block';
+          restartBtn.style.display = 'none';
+        }
+
+        function start() {
+          state.running = true;
+          overlay.style.display = 'none';
+          state.alive = true;
+          state.landed = false;
+        }
+
+        startBtn.addEventListener('click', () => start());
+        restartBtn.addEventListener('click', () => { reset(); start(); });
+
+        function rocketShape(p) {
+          // minimalistic rocket: body + fins + flame (handled separately)
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
+
+          // body
+          ctx.fillStyle = 'rgba(232,242,255,0.95)';
+          ctx.strokeStyle = 'rgba(90,160,255,0.35)';
+          ctx.lineWidth = 1;
+
+          // body (triangle-ish)
+          ctx.beginPath();
+          ctx.moveTo(0, -18);
+          ctx.lineTo(10, 10);
+          ctx.lineTo(0, 18);
+          ctx.lineTo(-10, 10);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // window stripe
+          ctx.fillStyle = 'rgba(73,166,255,0.55)';
+          ctx.beginPath();
+          ctx.roundRect(-6, -10, 12, 8, 3);
+          ctx.fill();
+
+          // fins
+          ctx.fillStyle = 'rgba(255,255,255,0.35)';
+          ctx.beginPath();
+          ctx.moveTo(-10, 10);
+          ctx.lineTo(-18, 18);
+          ctx.lineTo(-6, 18);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(10, 10);
+          ctx.lineTo(6, 18);
+          ctx.lineTo(18, 18);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.restore();
+        }
+
+        // Polyfill for roundRect if needed
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+          CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+            r = Math.min(r, w/2, h/2);
+            this.beginPath();
+            this.moveTo(x+r, y);
+            this.arcTo(x+w, y, x+w, y+h, r);
+            this.arcTo(x+w, y+h, x, y+h, r);
+            this.arcTo(x, y+h, x, y, r);
+            this.arcTo(x, y, x+w, y, r);
+            this.closePath();
+            return this;
+          }
+        }
+
+        function drawMoon() {
+          const x = state.moonX, y = state.moonY;
+          const w = 86, h = 70;
+
+          // ground glow
+          ctx.save();
+          const grd = ctx.createRadialGradient(x, y+10, 8, x, y+10, 160);
+          grd.addColorStop(0, 'rgba(120,190,255,0.20)');
+          grd.addColorStop(1, 'rgba(120,190,255,0.00)');
+          ctx.fillStyle = grd;
+          ctx.beginPath(); ctx.arc(x, y+10, 170, 0, Math.PI*2); ctx.fill();
+
+          // crater-ish moon
+          ctx.fillStyle = 'rgba(220,232,255,0.88)';
+          ctx.beginPath();
+          ctx.ellipse(x, y, w, h, 0, 0, Math.PI*2);
+          ctx.fill();
+
+          // surface
+          ctx.strokeStyle = 'rgba(70,120,190,0.25)';
+          ctx.lineWidth = 2;
+          for (let i=0;i<6;i++){
+            const cx = x + rnd(-w*0.3, w*0.3);
+            const cy = y + rnd(-h*0.25, h*0.25);
+            const rr = rnd(10, 18);
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, rr*0.9, rr*0.6, rnd(-0.4,0.4), 0, Math.PI*2);
+            ctx.stroke();
+          }
+
+          // landing pad
+          ctx.fillStyle = 'rgba(5,10,20,0.35)';
+          ctx.beginPath();
+          ctx.roundRect(x-34, y+10, 68, 16, 8);
+          ctx.fill();
+
+          ctx.strokeStyle = 'rgba(120,190,255,0.55)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.roundRect(x-34, y+10, 68, 16, 8);
+          ctx.stroke();
+
+          ctx.restore();
+        }
+
+        function spawnExhaust(intensity) {
+          const rate = intensity * 18; // particles per frame-ish
+          const n = Math.max(0, Math.floor(rate));
+          for (let i=0;i<n;i++){
+            const dx = Math.cos(state.angle) * rnd(-6, 6) - Math.sin(state.angle) * rnd(-6, 10);
+            const dy = Math.sin(state.angle) * rnd(-6, 6) + Math.cos(state.angle) * rnd(-6, 10);
+            state.exhaust.push({
+              x: state.x + dx,
+              y: state.y + dy + 18,
+              vx: state.vx - Math.sin(state.angle)*rnd(40,90) + rnd(-10,10),
+              vy: state.vy + Math.cos(state.angle)*rnd(40,90) + rnd(-20,20),
+              life: rnd(0.2,0.5),
+              t: 0,
+              size: rnd(2,4),
+              hue: rnd(190, 210),
+            });
+          }
+        }
+
+        function drawStars(dt){
+          for (const s of state.stars){
+            s.tw += dt*0.8;
+            const twk = 0.6 + 0.4*Math.sin(s.tw);
+            ctx.fillStyle = `rgba(200,220,255,${s.a*twk})`;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, s.r*twk, 0, Math.PI*2);
+            ctx.fill();
+          }
+        }
+
+        function update(dt) {
+          state.t += dt;
+          // score: stabilize = angle near 0 and vx near 0 (small)
+          const angleScore = 1 - Math.min(1, Math.abs(state.angle) / 0.35);
+          const speedScore = 1 - Math.min(1, Math.hypot(state.vx, state.vy) / 750);
+          const nearCenter = 1 - Math.min(1, Math.abs(state.x - state.moonX) / 220);
+          state.score += dt * (40*angleScore*0.4 + 40*speedScore*0.4 + 40*nearCenter*0.2);
+
+          // Inputs
+          const left = keyHeld('arrowleft','a');
+          const right = keyHeld('arrowright','d');
+          const thrustUp = keyHeld('arrowup','w');
+          const thrustDown = keyHeld('arrowdown','s');
+
+          const turn = (left ? -1 : 0) + (right ? 1 : 0);
+
+          // Fuel + thrust
+          let thrust = 0;
+          if (thrustUp && state.fuel > 0) thrust = 1;
+          if (thrustDown && state.fuel > 0) thrust = -0.35; // gentle braking thrust upward, negative to reduce descent
+
+          // Rotate by torque (thrust doesn't directly rotate; controls stabilize)
+          const targetAv = turn * 2.4;
+          state.av += (targetAv - state.av) * (1 - Math.exp(-dt*7.5));
+          state.angle += state.av * dt;
+
+          // Physics
+          // gravity (down)
+          state.vy += world.gravity * dt;
+
+          // drag
+          state.vx *= (1 - world.air*dt*60);
+          state.vy *= (1 - world.air*dt*60);
+
+          let thrustAcc = 0;
+          let fuelUse = 0;
+
+          if (thrust !== 0 && state.fuel > 0) {
+            const mag = Math.abs(thrust);
+            fuelUse = 180 * mag * dt;
+            state.fuel = Math.max(0, state.fuel);
+            thrustAcc = (thrust > 0 ? 1200 : 520) * mag; // upward acceleration for W
+            // Apply thrust along rocket's -Y (rocket points up)
+            const ax = Math.sin(state.angle) * thrustAcc * 0.12; // small lateral coupling
+            const ay = -Math.cos(state.angle) * thrustAcc;
+
+            state.vx += ax * dt;
+            state.vy += ay * dt;
+
+            if (thrust > 0) spawnExhaust(mag);
+          }
+
+          state.x += state.vx * dt;
+          state.y += state.vy * dt;
+
+          // Bounds
+          const margin = 40;
+          if (state.x < -margin) { state.x = -margin; state.vx *= -0.5; state.shake = 8; state.alive = false; }
+          if (state.x > innerWidth + margin) { state.x = innerWidth + margin; state.vx *= -0.5; state.shake = 8; state.alive = false; }
+
+          // Collision with moon pad (a simple ellipse area)
+          const padX = state.moonX, padY = state.moonY + 18;
+          const padW = 34, padH = 14;
+
+          const rx = Math.abs(state.x - padX) / padW;
+          const ry = Math.abs(state.y - padY) / padH;
+          const onPad = (rx*rx + ry*ry) <= 1.0;
+
+          // land when hitting region and moving down
+          if (!state.landed && onPad && state.vy > 0) {
+            // Check landing conditions
+            const angleOk = Math.abs(state.angle) < 0.22;   // rad
+            const speedOk = Math.abs(state.vx) < 95 && Math.abs(state.vy) < 140;
+            if (angleOk && speedOk) {
+              state.landed = true;
+              state.running = false;
+              state.best = Math.max(state.best, Math.floor(state.score));
+              overlay.style.display = 'grid';
+              restartBtn.style.display = 'inline-block';
+              startBtn.style.display = 'none';
+              overlay.querySelector('h1').textContent = 'Landung gelungen ✨';
+            } else {
+              state.alive = false;
+              state.running = false;
+              state.best = Math.max(state.best, Math.floor(state.score));
+              overlay.style.display = 'grid';
+              restartBtn.style.display = 'inline-block';
+              startBtn.style.display = 'none';
+              overlay.querySelector('h1').textContent = 'Crash 💥';
+              state.shake = 18;
+            }
+          }
+
+          // If rocket goes too low without landing -> crash
+          if (state.y > innerHeight + 120 && state.alive) {
+            state.alive = false;
+            state.running = false;
+            state.best = Math.max(state.best, Math.floor(state.score));
+            overlay.style.display = 'grid';
+            restartBtn.style.display = 'inline-block';
+            startBtn.style.display = 'none';
+            overlay.querySelector('h1').textContent = 'Zu tief — crash';
+          }
+
+          if (!state.alive || state.landed) state.running = false;
+          if (state.fuel <= 0) {
+            // still allow glide; if it continues crashing, handled above
+          }
+        }
+
+        function draw(dt) {
+          // Background
+          ctx.clearRect(0,0,innerWidth,innerHeight);
+
+          // Camera shake
+          let sx = 0, sy = 0;
+          if (state.shake > 0){
+            const k = state.shake;
+            sx = rnd(-k,k);
+            sy = rnd(-k,k);
+            state.shake *= 0.88;
+          }
+
+          ctx.save();
+          ctx.translate(sx, sy);
+
+          // Stars
+          drawStars(dt);
+
+          // Moon
+          drawMoon();
+
+          // Trajectory hint: landing alignment line
+          ctx.strokeStyle = 'rgba(120,190,255,0.14)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(state.moonX, state.moonY-110);
+          ctx.lineTo(state.moonX, innerHeight);
+          ctx.stroke();
+
+          // Rocket
+          rocketShape(state);
+
+          // Exhaust
+          for (const p of state.exhaust){
+            p.t += dt;
+            const k = p.t / p.life;
+            if (k >= 1) continue;
+            const life = 1 - k;
+            ctx.fillStyle = `hsla(${p.hue}, 90%, 70%, ${0.55*life})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size*life, 0, Math.PI*2);
+            ctx.fill();
+
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vx *= (1 - 0.9*dt);
+            p.vy *= (1 - 0.9*dt);
+          }
+          state.exhaust = state.exhaust.filter(p => p.t < p.life);
+
+          // Fuel bar
+          const barX = 16, barY = innerHeight - 26, barW = 190, barH = 10;
+          ctx.fillStyle = 'rgba(255,255,255,0.10)';
+          ctx.fillRect(barX, barY, barW, barH);
+          const frac = Math.max(0, state.fuel / world.maxFuel);
+          ctx.fillStyle = frac > 0.33 ? 'rgba(73,166,255,0.95)' : 'rgba(255,156,61,0.95)';
+          ctx.fillRect(barX, barY, barW*frac, barH);
+          ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+          ctx.strokeRect(barX, barY, barW, barH);
+
+          ctx.restore();
+        }
+
+        function loop(ts){
+          if (!state._last) state._last = ts;
+          const dt = Math.min(0.033, (ts - state._last) / 1000);
+          state._last = ts;
+
+          if (state.running) update(dt);
+          draw(dt);
+
+          // HUD
+          thrEl.textContent = state.fuel > 0 && (keyHeld('arrowup','w') ? true : false) ? 'aktiv' : (keyHeld('arrowdown','s') ? 'brems' : 'inaktiv');
+          const height = Math.max(0, Math.round((state.y - state.moonY) * -1)); // rough
+          hgtEl.textContent = height;
+          scrEl.textContent = Math.max(0, Math.floor(state.score));
+
+          requestAnimationFrame(loop);
+        }
+
+        reset();
+        requestAnimationFrame(loop);
+      })();
+    </script>
+  </body>
+</html>
