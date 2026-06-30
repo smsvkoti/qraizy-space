@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>Minimal Rocket</title>
+
+<style>
+html,body{
+    margin:0;
+    overflow:hidden;
+    background:#000;
+    touch-action:none;
+    font-family:monospace;
+}
+
+canvas{
+    display:block;
+}
+
+#hud{
+    position:absolute;
+    left:20px;
+    top:20px;
+    color:white;
+    font-size:18px;
+    line-height:1.5;
+}
+
+#gameover{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    color:white;
+    background:rgba(0,0,0,.7);
+    font-size:28px;
+    visibility:hidden;
+    text-align:center;
+}
+
+small{
+    font-size:16px;
+    margin-top:20px;
+}
+</style>
+
+</head>
+<body>
+
+<div id="hud">
+HEIGHT <span id="height">0</span> m<br>
+COINS <span id="coins">0</span>
+</div>
+
+<div id="gameover">
+<div>CRASH</div>
+<div id="final"></div>
+<small>TIPPEN ZUM NEUSTART</small>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+function resize(){
+canvas.width=innerWidth;
+canvas.height=innerHeight;
+}
+resize();
+addEventListener("resize",resize);
+
+let holding=false;
+
+document.addEventListener("pointerdown",()=>{
+holding=true;
+
+if(dead) restart();
+});
+
+document.addEventListener("pointerup",()=>{
+holding=false;
+});
+
+document.addEventListener("pointercancel",()=>{
+holding=false;
+});
+
+let rocket;
+let objects;
+let height;
+let coins;
+let dead;
+
+function restart(){
+
+rocket={
+x:canvas.width/2,
+y:canvas.height*0.75,
+vy:0
+};
+
+objects=[];
+height=0;
+coins=0;
+dead=false;
+
+document.getElementById("gameover").style.visibility="hidden";
+
+}
+
+restart();
+
+let spawn=0;
+
+function addMeteor(){
+
+objects.push({
+type:"meteor",
+x:Math.random()*canvas.width,
+y:-40,
+r:20+Math.random()*15,
+speed:4+Math.random()*2
+});
+
+}
+
+function addCoin(){
+
+objects.push({
+type:"coin",
+x:Math.random()*canvas.width,
+y:-30,
+r:10,
+speed:4
+});
+
+}
+
+function update(){
+
+if(dead) return;
+
+spawn--;
+
+if(spawn<=0){
+
+if(Math.random()<0.65)
+addMeteor();
+else
+addCoin();
+
+spawn=25+Math.random()*45;
+
+}
+
+if(holding)
+rocket.vy-=0.45;
+else
+rocket.vy+=0.22;
+
+rocket.vy=Math.max(-6,Math.min(6,rocket.vy));
+
+rocket.y+=rocket.vy;
+
+rocket.y=Math.max(80,Math.min(canvas.height-80,rocket.y));
+
+height+=2;
+
+for(let i=objects.length-1;i>=0;i--){
+
+let o=objects[i];
+
+o.y+=o.speed+height/5000;
+
+let dx=o.x-rocket.x;
+let dy=o.y-rocket.y;
+
+let dist=Math.sqrt(dx*dx+dy*dy);
+
+if(o.type=="meteor"){
+
+if(dist<o.r+18){
+
+dead=true;
+
+document.getElementById("gameover").style.visibility="visible";
+document.getElementById("final").innerHTML=
+Math.floor(height)+" m<br>"+coins+" Coins";
+
+}
+
+}else{
+
+if(dist<o.r+18){
+
+coins++;
+objects.splice(i,1);
+continue;
+
+}
+
+}
+
+if(o.y>canvas.height+40)
+objects.splice(i,1);
+
+}
+
+document.getElementById("height").innerText=Math.floor(height);
+document.getElementById("coins").innerText=coins;
+
+}
+
+function drawRocket(){
+
+ctx.save();
+
+ctx.translate(rocket.x,rocket.y);
+
+ctx.strokeStyle="white";
+ctx.lineWidth=3;
+
+ctx.beginPath();
+
+ctx.moveTo(0,-25);
+ctx.lineTo(-14,10);
+ctx.lineTo(-7,8);
+ctx.lineTo(-7,25);
+ctx.lineTo(7,25);
+ctx.lineTo(7,8);
+ctx.lineTo(14,10);
+ctx.closePath();
+
+ctx.stroke();
+
+if(holding){
+
+ctx.beginPath();
+ctx.moveTo(-5,25);
+ctx.lineTo(0,42+Math.random()*8);
+ctx.lineTo(5,25);
+ctx.stroke();
+
+}
+
+ctx.restore();
+
+}
+
+function draw(){
+
+ctx.fillStyle="black";
+ctx.fillRect(0,0,canvas.width,canvas.height);
+
+for(let o of objects){
+
+if(o.type=="meteor"){
+
+ctx.strokeStyle="white";
+ctx.lineWidth=2;
+
+ctx.beginPath();
+ctx.arc(o.x,o.y,o.r,0,Math.PI*2);
+ctx.stroke();
+
+ctx.beginPath();
+ctx.arc(o.x-6,o.y-4,3,0,Math.PI*2);
+ctx.stroke();
+
+ctx.beginPath();
+ctx.arc(o.x+6,o.y+5,4,0,Math.PI*2);
+ctx.stroke();
+
+}else{
+
+ctx.fillStyle="#FFD700";
+
+ctx.beginPath();
+ctx.arc(o.x,o.y,o.r,0,Math.PI*2);
+ctx.fill();
+
+}
+
+}
+
+drawRocket();
+
+}
+
+function loop(){
+
+update();
+draw();
+
+requestAnimationFrame(loop);
+
+}
+
+loop();
+
+</script>
+
+</body>
+</html>
