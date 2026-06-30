@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>90er Space Ascent</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Courier New', monospace;
+            color: #0f0;
+            text-align: center;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        canvas {
+            display: block;
+            background-color: #000;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+        #gameUI {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            right: 5px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            font-size: 12px;
+            text-shadow: 0 0 5px #0f0;
+        }
+        #score, #altitude, #fuel {
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 3px 8px;
+            border: 1px solid #0f0;
+            border-radius: 3px;
+        }
+        #startScreen, #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.9)), url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23000"/><circle cx="20" cy="20" r="1" fill="%23fff"/><circle cx="80" cy="40" r="1" fill="%23fff"/><circle cx="40" cy="80" r="1" fill="%23fff"/><circle cx="60" cy="10" r="1" fill="%23fff"/></svg>');
+            z-index: 10;
+            color: #0f0;
+            text-shadow: 0 0 10px #0f0;
+        }
+        #startButton, #restartButton {
+            padding: 10px 20px;
+            font-size: 16px;
+            font-family: 'Courier New', monospace;
+            background-color: #000;
+            color: #0f0;
+            border: 2px solid #0f0;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 15px;
+            box-shadow: 0 0 10px #0f0;
+        }
+        #startButton:active, #restartButton:active {
+            border-color: #ff0;
+            color: #ff0;
+            box-shadow: 0 0 15px #ff0;
+        }
+        h1 {
+            font-size: 1.8em;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        p {
+            font-size: 0.9em;
+            max-width: 85%;
+            line-height: 1.4;
+            margin-bottom: 10px;
+        }
+        .pixel-art {
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameUI">
+        <div id="altitude">HÖHE: 0m</div>
+        <div id="fuel">TREIBSTOFF: 100%</div>
+        <div id="score">PUNKTE: 0</div>
+    </div>
+    
+    <div id="startScreen">
+        <div class="pixel-art">
+            <pre style="font-family: monospace; line-height: 1;">
+   /\\
+  /  \\
+ /____\\
+|      |
+|  🚀  |
+|______|
+  |  |
+  |__|
+            </pre>
+        </div>
+        <h1>90er Space Ascent</h1>
+        <p>TIPPE AUF DEN BILDSCHIRM, UM HOCHZUFLIEGEN!<br>WEICHE HINDERNISSEN AUS UND SAMMELE STERNE (⭐).<br>ACHTE AUF DEINEN TREIBSTOFF!</p>
+        <button id="startButton">START</button>
+    </div>
+    
+    <div id="gameOverScreen" style="display: none;">
+        <div class="pixel-art">
+            <pre style="font-family: monospace; line-height: 1;">
+  ______
+ /      \
+|  💥   |
+|_______|
+   |   |
+   |___|
+            </pre>
+        </div>
+        <h1>GAME OVER</h1>
+        <p id="finalScore">HÖHE: 0m | PUNKTE: 0</p>
+        <button id="restartButton">NEU STARTEN</button>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // Spielvariablen
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const altitudeElement = document.getElementById('altitude');
+        const fuelElement = document.getElementById('fuel');
+        const scoreElement = document.getElementById('score');
+        const finalScoreElement = document.getElementById('finalScore');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+
+        // Spielstatus
+        let gameRunning = false;
+        let altitude = 0;
+        let fuel = 100;
+        let score = 0;
+        let highScore = 0;
+        let player = { x: 0, y: 0, width: 12, height: 20, speed: 0, maxSpeed: 8, acceleration: 0.3 };
+        let stars = [];
+        let obstacles = [];
+        let clouds = [];
+        let fuelPickups = [];
+        let starSpawnRate = 0.015;
+        let obstacleSpawnRate = 0.01;
+        let cloudSpawnRate = 0.005;
+        let fuelPickupSpawnRate = 0.003;
+        let gravity = 0.1;
+        let fuelConsumptionRate = 0.05;
+        let lastTapTime = 0;
+        let tapCooldown = 200; // ms
+
+        // Pixel-Art-Sprites (als einfache Emojis/Zeichen für Retro-Look)
+        const playerSprite = '🚀';
+        const starSprite = '⭐';
+        const obstacleSprite = '🪨';
+        const cloudSprite = '☁️';
+        const fuelSprite = '⛽';
+
+        // Initialisierung
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // Touch-Steuerung
+            canvas.addEventListener('touchstart', handleTap, false);
+            canvas.addEventListener('click', handleTap, false);
+
+            // Start-Button
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', startGame);
+
+            // Erste Zeichnung
+            draw();
+        }
+
+        function resizeCanvas() {
+            // Für Handy: Canvas auf volle Breite, Höhe dynamisch
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (gameRunning) {
+                player.x = canvas.width / 2 - player.width / 2;
+                player.y = canvas.height - player.height - 20;
+            }
+        }
+
+        function handleTap(e) {
+            if (!gameRunning) return;
+            e.preventDefault();
+            
+            const now = Date.now();
+            if (now - lastTapTime < tapCooldown) return;
+            lastTapTime = now;
+            
+            // Spieler nach oben beschleunigen
+            player.speed = -player.maxSpeed;
+            
+            // Treibstoff verbrauchen
+            fuel -= fuelConsumptionRate * 2;
+            if (fuel < 0) fuel = 0;
+            updateFuelDisplay();
+        }
+
+        function startGame() {
+            // Zurücksetzen
+            altitude = 0;
+            fuel = 100;
+            score = 0;
+            player.x = canvas.width / 2 - player.width / 2;
+            player.y = canvas.height - player.height - 20;
+            player.speed = 0;
+            stars = [];
+            obstacles = [];
+            clouds = [];
+            fuelPickups = [];
+            
+            altitudeElement.textContent = `HÖHE: ${Math.floor(altitude)}m`;
+            fuelElement.textContent = `TREIBSTOFF: ${Math.floor(fuel)}%`;
+            scoreElement.textContent = `PUNKTE: ${score}`;
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            gameRunning = true;
+            
+            // Spielschleife starten
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update() {
+            // Spielerbewegung (Schwerkraft)
+            player.speed += gravity;
+            player.y += player.speed;
+            
+            // Spieler in Bounds halten
+            if (player.y < 0) {
+                player.y = 0;
+                player.speed = 0;
+            }
+            if (player.y > canvas.height - player.height) {
+                player.y = canvas.height - player.height;
+                player.speed = 0;
+            }
+            if (player.x < 0) player.x = 0;
+            if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
+
+            // Höhe erhöhen (je höher, desto schneller)
+            altitude += Math.abs(player.speed) * 0.2;
+            altitudeElement.textContent = `HÖHE: ${Math.floor(altitude)}m`;
+
+            // Treibstoff langsam regenerieren
+            if (fuel < 100) {
+                fuel += 0.02;
+                if (fuel > 100) fuel = 100;
+                updateFuelDisplay();
+            }
+
+            // Zufälliges Spawnen von Objekten
+            if (Math.random() < starSpawnRate) spawnStar();
+            if (Math.random() < obstacleSpawnRate) spawnObstacle();
+            if (Math.random() < cloudSpawnRate) spawnCloud();
+            if (Math.random() < fuelPickupSpawnRate && fuel < 80) spawnFuelPickup();
+
+            // Sterne bewegen und Kollision prüfen
+            for (let i = stars.length - 1; i >= 0; i--) {
+                stars[i].y += 2;
+                
+                // Kollision mit Spieler
+                if (checkCollision(player, stars[i])) {
+                    stars.splice(i, 1);
+                    score += 10;
+                    scoreElement.textContent = `PUNKTE: ${score}`;
+                    continue;
+                }
+                
+                // Stern ist aus dem Bildschirm
+                if (stars[i].y > canvas.height) {
+                    stars.splice(i, 1);
+                }
+            }
+
+            // Hindernisse bewegen und Kollision prüfen
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].y += 3;
+                
+                // Kollision mit Spieler
+                if (checkCollision(player, obstacles[i])) {
+                    obstacles.splice(i, 1);
+                    gameOver();
+                    return;
+                }
+                
+                // Hindernis ist aus dem Bildschirm
+                if (obstacles[i].y > canvas.height) {
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // Wolken bewegen
+            for (let i = clouds.length - 1; i >= 0; i--) {
+                clouds[i].y += 1;
+                
+                if (clouds[i].y > canvas.height) {
+                    clouds.splice(i, 1);
+                }
+            }
+
+            // Treibstoff-Pickups bewegen und Kollision prüfen
+            for (let i = fuelPickups.length - 1; i >= 0; i--) {
+                fuelPickups[i].y += 2;
+                
+                // Kollision mit Spieler
+                if (checkCollision(player, fuelPickups[i])) {
+                    fuelPickups.splice(i, 1);
+                    fuel += 20;
+                    if (fuel > 100) fuel = 100;
+                    updateFuelDisplay();
+                    continue;
+                }
+                
+                // Pickup ist aus dem Bildschirm
+                if (fuelPickups[i].y > canvas.height) {
+                    fuelPickups.splice(i, 1);
+                }
+            }
+
+            // Game Over bei Treibstoffmangel
+            if (fuel <= 0) {
+                gameOver();
+            }
+        }
+
+        function spawnStar() {
+            stars.push({
+                x: Math.random() * (canvas.width - 20),
+                y: -20,
+                width: 10,
+                height: 10,
+                sprite: starSprite
+            });
+        }
+
+        function spawnObstacle() {
+            obstacles.push({
+                x: Math.random() * (canvas.width - 30),
+                y: -30,
+                width: 30,
+                height: 20,
+                sprite: obstacleSprite
+            });
+        }
+
+        function spawnCloud() {
+            clouds.push({
+                x: Math.random() * (canvas.width - 40),
+                y: -40,
+                width: 40,
+                height: 20,
+                sprite: cloudSprite
+            });
+        }
+
+        function spawnFuelPickup() {
+            fuelPickups.push({
+                x: Math.random() * (canvas.width - 20),
+                y: -20,
+                width: 20,
+                height: 20,
+                sprite: fuelSprite
+            });
+        }
+
+        function checkCollision(obj1, obj2) {
+            return !(
+                obj1.x + obj1.width < obj2.x ||
+                obj1.x > obj2.x + obj2.width ||
+                obj1.y + obj1.height < obj2.y ||
+                obj1.y > obj2.y + obj2.height
+            );
+        }
+
+        function updateFuelDisplay() {
+            fuelElement.textContent = `TREIBSTOFF: ${Math.floor(fuel)}%`;
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalScoreElement.textContent = `HÖHE: ${Math.floor(altitude)}m | PUNKTE: ${score}`;
+            gameOverScreen.style.display = 'flex';
+            
+            // Highscore aktualisieren
+            if (altitude > highScore) {
+                highScore = altitude;
+            }
+        }
+
+        function draw() {
+            // Hintergrund (Sternenhimmel)
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Pixel-Sterne im Hintergrund
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < 50; i++) {
+                const x = (i * 17) % canvas.width;
+                const y = Math.floor((i * 13) % canvas.height);
+                ctx.fillRect(x, y, 1, 1);
+            }
+
+            // Wolken zeichnen
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+            for (const cloud of clouds) {
+                ctx.fillRect(cloud.x, cloud.y, cloud.width, cloud.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '16px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(cloud.sprite, cloud.x + cloud.width / 2, cloud.y + cloud.height / 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+            }
+
+            // Hindernisse zeichnen
+            for (const obstacle of obstacles) {
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '20px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(obstacle.sprite, obstacle.x + obstacle.width / 2, obstacle.y + obstacle.height / 2);
+            }
+
+            // Sterne zeichnen
+            for (const star of stars) {
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(star.x, star.y, star.width, star.height);
+                ctx.fillStyle = '#000';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(star.sprite, star.x + star.width / 2, star.y + star.height / 2);
+            }
+
+            // Treibstoff-Pickups zeichnen
+            for (const pickup of fuelPickups) {
+                ctx.fillStyle = '#00F';
+                ctx.fillRect(pickup.x, pickup.y, pickup.width, pickup.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '16px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(pickup.sprite, pickup.x + pickup.width / 2, pickup.y + pickup.height / 2);
+            }
+
+            // Spieler zeichnen (Pixel-Art-Rakete)
+            ctx.fillStyle = '#F00';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(playerSprite, player.x + player.width / 2, player.y + player.height / 2);
+
+            // Boden (für Perspektive)
+            ctx.fillStyle = '#222';
+            ctx.fillRect(0, canvas.height - 10, canvas.width, 10);
+        }
+
+        // Spiel starten
+        init();
+    </script>
+</body>
+</html>
