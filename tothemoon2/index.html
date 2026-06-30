@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Collector</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+            color: white;
+            text-align: center;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            background-color: #0a0a1a;
+        }
+        #gameUI {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+        }
+        #score, #lives {
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        #startScreen, #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 10;
+        }
+        #startButton, #restartButton {
+            padding: 12px 24px;
+            font-size: 18px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        #startButton:hover, #restartButton:hover {
+            background-color: #45a049;
+        }
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+        p {
+            font-size: 1.2em;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameUI">
+        <div id="score">Punkte: 0</div>
+        <div id="lives">❤️❤️❤️</div>
+    </div>
+    
+    <div id="startScreen">
+        <h1>Space Collector</h1>
+        <p>Steuere dein Raumschiff mit den Pfeiltasten oder durch Neigen des Handys. Sammle Sterne (⭐) und weiche Asteroiden (💥) aus!</p>
+        <button id="startButton">Spiel starten</button>
+    </div>
+    
+    <div id="gameOverScreen" style="display: none;">
+        <h1>Game Over!</h1>
+        <p id="finalScore">Punkte: 0</p>
+        <button id="restartButton">Neu starten</button>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // Spielvariablen
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const scoreElement = document.getElementById('score');
+        const livesElement = document.getElementById('lives');
+        const finalScoreElement = document.getElementById('finalScore');
+        const startButton = document.getElementById('startButton');
+        const restartButton = document.getElementById('restartButton');
+
+        // Spielstatus
+        let gameRunning = false;
+        let score = 0;
+        let lives = 3;
+        let player = { x: 0, y: 0, size: 20, speed: 5 };
+        let stars = [];
+        let asteroids = [];
+        let starSpawnRate = 0.02;
+        let asteroidSpawnRate = 0.01;
+        let starSpeed = 2;
+        let asteroidSpeed = 3;
+
+        // Touch/Neigung-Steuerung
+        let tiltX = 0;
+        let tiltY = 0;
+
+        // Initialisierung
+        function init() {
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // Tastatursteuerung
+            document.addEventListener('keydown', (e) => {
+                if (!gameRunning) return;
+                switch(e.key) {
+                    case 'ArrowUp': player.y -= player.speed; break;
+                    case 'ArrowDown': player.y += player.speed; break;
+                    case 'ArrowLeft': player.x -= player.speed; break;
+                    case 'ArrowRight': player.x += player.speed; break;
+                }
+                keepPlayerInBounds();
+            });
+
+            // Touch-Steuerung für Handy
+            document.addEventListener('touchstart', handleTouchStart, false);
+            document.addEventListener('touchmove', handleTouchMove, false);
+
+            // Neigungssensor für Handy
+            if (window.DeviceOrientationEvent) {
+                window.addEventListener('deviceorientation', (e) => {
+                    tiltX = e.gamma / 20; // gamma: Neigung links/rechts (-90 bis 90)
+                    tiltY = e.beta / 20;  // beta: Neigung vorne/hinten (-180 bis 180)
+                });
+            }
+
+            // Start-Button
+            startButton.addEventListener('click', startGame);
+            restartButton.addEventListener('click', startGame);
+
+            // Erste Zeichnung
+            draw();
+        }
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (gameRunning) {
+                player.x = canvas.width / 2;
+                player.y = canvas.height / 2;
+            }
+        }
+
+        function handleTouchStart(e) {
+            e.preventDefault();
+        }
+
+        function handleTouchMove(e) {
+            if (!gameRunning) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // Berechne Richtung vom Zentrum zum Touch-Punkt
+            const dx = touch.clientX - centerX;
+            const dy = touch.clientY - centerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance > 10) {
+                player.x += (dx / distance) * player.speed;
+                player.y += (dy / distance) * player.speed;
+                keepPlayerInBounds();
+            }
+        }
+
+        function startGame() {
+            // Zurücksetzen
+            score = 0;
+            lives = 3;
+            stars = [];
+            asteroids = [];
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+            
+            scoreElement.textContent = `Punkte: ${score}`;
+            livesElement.textContent = '❤️❤️❤️';
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            gameRunning = true;
+            
+            // Spielschleife starten
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update() {
+            // Spieler mit Neigung steuern (falls verfügbar)
+            if (Math.abs(tiltX) > 0.1 || Math.abs(tiltY) > 0.1) {
+                player.x += tiltX * player.speed / 2;
+                player.y += tiltY * player.speed / 2;
+                keepPlayerInBounds();
+            }
+
+            // Zufälliges Spawnen von Sternen
+            if (Math.random() < starSpawnRate) {
+                spawnStar();
+            }
+
+            // Zufälliges Spawnen von Asteroiden
+            if (Math.random() < asteroidSpawnRate) {
+                spawnAsteroid();
+            }
+
+            // Sterne bewegen und Kollision prüfen
+            for (let i = stars.length - 1; i >= 0; i--) {
+                stars[i].x -= starSpeed;
+                
+                // Kollision mit Spieler
+                if (checkCollision(player, stars[i])) {
+                    stars.splice(i, 1);
+                    score += 10;
+                    scoreElement.textContent = `Punkte: ${score}`;
+                    continue;
+                }
+                
+                // Stern ist aus dem Bildschirm
+                if (stars[i].x + stars[i].size < 0) {
+                    stars.splice(i, 1);
+                }
+            }
+
+            // Asteroiden bewegen und Kollision prüfen
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                asteroids[i].x -= asteroidSpeed;
+                
+                // Kollision mit Spieler
+                if (checkCollision(player, asteroids[i])) {
+                    asteroids.splice(i, 1);
+                    lives--;
+                    updateLivesDisplay();
+                    
+                    if (lives <= 0) {
+                        gameOver();
+                    }
+                    continue;
+                }
+                
+                // Asteroid ist aus dem Bildschirm
+                if (asteroids[i].x + asteroids[i].size < 0) {
+                    asteroids.splice(i, 1);
+                }
+            }
+        }
+
+        function spawnStar() {
+            const size = Math.random() * 15 + 10;
+            stars.push({
+                x: canvas.width + size,
+                y: Math.random() * (canvas.height - size),
+                size: size
+            });
+        }
+
+        function spawnAsteroid() {
+            const size = Math.random() * 25 + 20;
+            asteroids.push({
+                x: canvas.width + size,
+                y: Math.random() * (canvas.height - size),
+                size: size
+            });
+        }
+
+        function checkCollision(obj1, obj2) {
+            const dx = obj1.x - obj2.x;
+            const dy = obj1.y - obj2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance < (obj1.size + obj2.size) / 2;
+        }
+
+        function keepPlayerInBounds() {
+            player.x = Math.max(player.size, Math.min(canvas.width - player.size, player.x));
+            player.y = Math.max(player.size, Math.min(canvas.height - player.size, player.y));
+        }
+
+        function updateLivesDisplay() {
+            let hearts = '';
+            for (let i = 0; i < lives; i++) {
+                hearts += '❤️';
+            }
+            livesElement.textContent = hearts;
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalScoreElement.textContent = `Punkte: ${score}`;
+            gameOverScreen.style.display = 'flex';
+        }
+
+        function draw() {
+            // Hintergrund
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Sterne im Hintergrund
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < 100; i++) {
+                const x = Math.random() * canvas.width;
+                const y = Math.random() * canvas.height;
+                const size = Math.random() * 1.5;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Spieler (Raumschiff)
+            ctx.fillStyle = '#4CAF50';
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y - player.size);
+            ctx.lineTo(player.x - player.size, player.y + player.size);
+            ctx.lineTo(player.x + player.size, player.y + player.size);
+            ctx.closePath();
+            ctx.fill();
+
+            // Sterne (Sammelobjekte)
+            ctx.fillStyle = '#FFD700';
+            for (const star of stars) {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Stern-Emoji in der Mitte
+                ctx.font = `${star.size}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('⭐', star.x, star.y);
+            }
+
+            // Asteroiden (Gefahr)
+            ctx.fillStyle = '#8B4513';
+            for (const asteroid of asteroids) {
+                ctx.beginPath();
+                ctx.arc(asteroid.x, asteroid.y, asteroid.size / 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Asteroid-Emoji in der Mitte
+                ctx.font = `${asteroid.size * 0.6}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('💥', asteroid.x, asteroid.y);
+            }
+        }
+
+        // Spiel starten
+        init();
+    </script>
+</body>
+</html>
